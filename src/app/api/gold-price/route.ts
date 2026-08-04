@@ -26,6 +26,23 @@ async function fetchYahooChart(
   return { current: result.meta.regularMarketPrice, history: closes };
 }
 
+/** Live spot gold (USD/oz) via TradingView TVC:GOLD. */
+async function fetchSpotGoldUSD(): Promise<number> {
+  const res = await fetch(
+    "https://scanner.tradingview.com/symbol?symbol=TVC:GOLD&fields=close,description,type",
+    {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      next: { revalidate: 300 },
+    },
+  );
+  if (!res.ok) throw new Error(`TradingView gold failed: ${res.status}`);
+  const data: { close?: number } = await res.json();
+  if (typeof data.close !== "number" || !(data.close > 0)) {
+    throw new Error("TradingView returned invalid gold price");
+  }
+  return data.close;
+}
+
 function percentile(current: number, values: number[]): number {
   if (values.length === 0) return 50;
   const sorted = [...values].sort((a, b) => a - b);
@@ -139,18 +156,25 @@ export async function GET(request: Request) {
     const period = p === "daily" ? "daily" : p === "weekly" ? "weekly" : p === "monthly" ? "monthly" : "yearly";
     const cfg = PERIOD_CONFIG[period];
 
-    const [gold, goldYearly, ils] = await Promise.all([
+    // Spot from TradingView; Yahoo GC=F only for history/technicals.
+    const [gold, goldYearly, ils, spotGoldUSD] = await Promise.all([
       fetchYahooChart("GC=F", cfg.goldRange, cfg.goldInterval),
       period !== "yearly" ? fetchYahooChart("GC=F", "1y", "1d") : null,
       fetchYahooChart("USDILS=X", cfg.ilsRange, cfg.ilsInterval),
+      fetchSpotGoldUSD(),
     ]);
 
-    const goldPriceUSD = gold.current;
+    const goldPriceUSD = spotGoldUSD;
     const usdToILS = ils.current;
     const goldPriceILS = goldPriceUSD * usdToILS;
 
-    const goldHistory = gold.history;
-    const goldFullHistory = goldYearly?.history ?? gold.history;
+    // Align futures history to spot level (basis is usually ~1%).
+    const basis =
+      gold.current > 0 ? spotGoldUSD / gold.current : 1;
+    const goldHistory = gold.history.map((p) => p * basis);
+    const goldFullHistory = (goldYearly?.history ?? gold.history).map(
+      (p) => p * basis,
+    );
     const ilsHistory = ils.history;
 
     let goldSignal: "low" | "mid" | "high" | "very_high" = "mid";
