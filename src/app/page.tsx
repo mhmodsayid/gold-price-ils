@@ -211,7 +211,9 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/gold-price?period=${period}`);
+      const res = await fetch(`/api/gold-price?period=${period}&_=${Date.now()}`, {
+        cache: "no-store",
+      });
       if (!res.ok) throw new Error("Failed to fetch");
       const json: GoldPriceData = await res.json();
       setData(json);
@@ -225,7 +227,7 @@ export default function Home() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 5 * 60 * 1000);
+    const interval = setInterval(fetchData, 60 * 1000);
     return () => clearInterval(interval);
   }, [fetchData]);
 

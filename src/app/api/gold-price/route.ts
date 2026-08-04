@@ -32,7 +32,7 @@ async function fetchSpotGoldUSD(): Promise<number> {
     "https://scanner.tradingview.com/symbol?symbol=TVC:GOLD&fields=close,description,type",
     {
       headers: { "User-Agent": "Mozilla/5.0" },
-      next: { revalidate: 300 },
+      cache: "no-store",
     },
   );
   if (!res.ok) throw new Error(`TradingView gold failed: ${res.status}`);
@@ -148,6 +148,9 @@ const PERIOD_CONFIG: Record<string, { goldRange: YahooRange; goldInterval: Yahoo
   monthly: { goldRange: "1mo", goldInterval: "1d",  ilsRange: "1mo", ilsInterval: "1d" },
   yearly:  { goldRange: "1y",  goldInterval: "1d",  ilsRange: "1y",  ilsInterval: "1d" },
 };
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(request: Request) {
   try {
@@ -308,6 +311,10 @@ export async function GET(request: Request) {
       combined,
       combinedScore: Math.round(combinedScore * 10) / 10,
       timestamp: new Date().toISOString(),
+    }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      },
     });
   } catch (error) {
     console.error("API Error:", error);
