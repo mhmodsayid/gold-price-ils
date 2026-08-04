@@ -12,10 +12,13 @@ async function fetchYahooChart(
   symbol: string,
   range: YahooRange,
   interval: YahooInterval,
+  fresh = false,
 ): Promise<{ current: number; history: number[] }> {
   const res = await fetch(
     `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}`,
-    { next: { revalidate: range === "1d" ? 300 : 3600 } },
+    fresh
+      ? { cache: "no-store" }
+      : { next: { revalidate: range === "1d" ? 300 : 3600 } },
   );
   if (!res.ok) throw new Error(`Yahoo Finance failed for ${symbol}: ${res.status}`);
   const data = await res.json();
@@ -157,13 +160,14 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const p = searchParams.get("period");
     const period = p === "daily" ? "daily" : p === "weekly" ? "weekly" : p === "monthly" ? "monthly" : "yearly";
+    const fresh = searchParams.get("fresh") === "1";
     const cfg = PERIOD_CONFIG[period];
 
     // Spot from TradingView; Yahoo GC=F only for history/technicals.
     const [gold, goldYearly, ils, spotGoldUSD] = await Promise.all([
-      fetchYahooChart("GC=F", cfg.goldRange, cfg.goldInterval),
-      period !== "yearly" ? fetchYahooChart("GC=F", "1y", "1d") : null,
-      fetchYahooChart("USDILS=X", cfg.ilsRange, cfg.ilsInterval),
+      fetchYahooChart("GC=F", cfg.goldRange, cfg.goldInterval, fresh),
+      period !== "yearly" ? fetchYahooChart("GC=F", "1y", "1d", fresh) : null,
+      fetchYahooChart("USDILS=X", cfg.ilsRange, cfg.ilsInterval, fresh),
       fetchSpotGoldUSD(),
     ]);
 

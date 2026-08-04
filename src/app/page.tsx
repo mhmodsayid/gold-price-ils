@@ -211,9 +211,16 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/gold-price?period=${period}&_=${Date.now()}`, {
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/gold-price?period=${period}&fresh=1&_=${Date.now()}`,
+        {
+          cache: "no-store",
+          headers: {
+            "Cache-Control": "no-cache",
+            Pragma: "no-cache",
+          },
+        },
+      );
       if (!res.ok) throw new Error("Failed to fetch");
       const json: GoldPriceData = await res.json();
       setData(json);
@@ -1126,7 +1133,7 @@ export default function Home() {
             {/* Footer */}
             <div className="text-center text-xs text-gray-600 space-y-1">
               {lastRefresh && <p>Last updated: {formatTime(lastRefresh)}</p>}
-              <p>Auto-refreshes every 5 minutes · Prices are indicative</p>
+              <p>Auto-refreshes every minute · Prices are indicative</p>
             </div>
           </>
         )}
