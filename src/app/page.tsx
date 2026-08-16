@@ -37,6 +37,7 @@ interface GoldPriceData {
   combined: RecLevel;
   combinedScore: number;
   chart: { t: number; v: number }[];
+  spotSource?: "gold-api.com" | "swissquote" | "tradingview";
   timestamp: string;
 }
 
@@ -93,6 +94,12 @@ const REC_CONFIG: Record<
     border: "border-red-500/30",
     icon: "▼▼",
   },
+};
+
+const SPOT_SOURCE_LABELS: Record<string, string> = {
+  "gold-api.com": "gold-api.com",
+  swissquote: "Swissquote XAU/USD",
+  tradingview: "TradingView",
 };
 
 const GOLD_LABELS: Record<string, { text: string; color: string }> = {
@@ -366,6 +373,11 @@ export default function Home() {
                     <p className="text-2xl sm:text-3xl font-bold text-white">
                       ${formatNumber(data.goldPriceUSD)}
                     </p>
+                    {data.spotSource && (
+                      <p className="text-[10px] text-gray-600 mt-1">
+                        Spot · {SPOT_SOURCE_LABELS[data.spotSource] ?? data.spotSource}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <p className="text-sm text-gray-400 mb-1">ILS (₪)</p>

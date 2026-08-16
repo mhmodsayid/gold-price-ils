@@ -41,21 +41,76 @@ async function fetchYahooChart(
   return { current: result.meta.regularMarketPrice, points };
 }
 
-/** Live spot gold (USD/oz) via TradingView TVC:GOLD. */
-async function fetchSpotGoldUSD(): Promise<number> {
-  const res = await fetch(
-    "https://scanner.tradingview.com/symbol?symbol=TVC:GOLD&fields=close,description,type",
-    {
-      headers: { "User-Agent": "Mozilla/5.0" },
-      cache: "no-store",
+type SpotSource = "gold-api.com" | "swissquote" | "tradingview";
+
+interface SpotQuote {
+  price: number;
+  source: SpotSource;
+}
+
+function isSaneGoldUsd(n: number | undefined): n is number {
+  return typeof n === "number" && Number.isFinite(n) && n > 1000 && n < 20000;
+}
+
+async function fetchJson(url: string, timeoutMs = 5000): Promise<unknown> {
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      Accept: "application/json",
     },
-  );
-  if (!res.ok) throw new Error(`TradingView gold failed: ${res.status}`);
-  const data: { close?: number } = await res.json();
-  if (typeof data.close !== "number" || !(data.close > 0)) {
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) throw new Error(`${url} failed: ${res.status}`);
+  return res.json();
+}
+
+/** Live XAU/USD from gold-api.com (no key). */
+async function fetchSpotFromGoldApi(): Promise<SpotQuote> {
+  const data = (await fetchJson("https://api.gold-api.com/price/XAU")) as {
+    price?: number;
+  };
+  if (!isSaneGoldUsd(data.price)) throw new Error("gold-api.com returned invalid gold price");
+  return { price: data.price, source: "gold-api.com" };
+}
+
+/** Live XAU/USD mid from Swissquote public FX quotes. */
+async function fetchSpotFromSwissquote(): Promise<SpotQuote> {
+  const data = (await fetchJson(
+    "https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD",
+  )) as Array<{ spreadProfilePrices?: Array<{ bid: number; ask: number }> }>;
+  for (const row of data) {
+    const p = row.spreadProfilePrices?.[0];
+    if (p && isSaneGoldUsd(p.bid) && isSaneGoldUsd(p.ask)) {
+      return { price: (p.bid + p.ask) / 2, source: "swissquote" };
+    }
+  }
+  throw new Error("Swissquote returned no XAU/USD quote");
+}
+
+/** Last-resort spot via TradingView TVC:GOLD. */
+async function fetchSpotFromTradingView(): Promise<SpotQuote> {
+  const data = (await fetchJson(
+    "https://scanner.tradingview.com/symbol?symbol=TVC:GOLD&fields=close,description,type",
+  )) as { close?: number };
+  if (!isSaneGoldUsd(data.close)) {
     throw new Error("TradingView returned invalid gold price");
   }
-  return data.close;
+  return { price: data.close, source: "tradingview" };
+}
+
+/** Live spot gold (USD/oz). Yahoo GC=F is a futures contract, not spot. */
+async function fetchSpotGoldUSD(): Promise<SpotQuote> {
+  const sources = [fetchSpotFromGoldApi, fetchSpotFromSwissquote, fetchSpotFromTradingView];
+  const errors: string[] = [];
+  for (const fetchSpot of sources) {
+    try {
+      return await fetchSpot();
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  throw new Error(`All spot gold sources failed: ${errors.join("; ")}`);
 }
 
 function percentile(current: number, values: number[]): number {
@@ -191,21 +246,21 @@ export async function GET(request: Request) {
     const fresh = searchParams.get("fresh") === "1";
     const cfg = PERIOD_CONFIG[period];
 
-    // Spot from TradingView; Yahoo GC=F only for history/technicals.
-    const [gold, goldYearly, ils, spotGoldUSD] = await Promise.all([
+    // Spot from gold-api.com (Swissquote / TradingView fallback). Yahoo GC=F is history only.
+    const [gold, goldYearly, ils, spot] = await Promise.all([
       fetchYahooChart("GC=F", cfg.goldRange, cfg.goldInterval, fresh),
       period !== "yearly" ? fetchYahooChart("GC=F", "1y", "1d", fresh) : null,
       fetchYahooChart("USDILS=X", cfg.ilsRange, cfg.ilsInterval, fresh),
       fetchSpotGoldUSD(),
     ]);
 
-    const goldPriceUSD = spotGoldUSD;
+    const goldPriceUSD = spot.price;
     const usdToILS = ils.current;
     const goldPriceILS = goldPriceUSD * usdToILS;
 
     // Align futures history to spot level (basis is usually ~1%).
     const basis =
-      gold.current > 0 ? spotGoldUSD / gold.current : 1;
+      gold.current > 0 ? goldPriceUSD / gold.current : 1;
     const goldHistory = gold.points.map((p) => p.v * basis);
     const goldFullHistory = (goldYearly?.points ?? gold.points).map(
       (p) => p.v * basis,
@@ -352,6 +407,7 @@ export async function GET(request: Request) {
       combined,
       combinedScore: Math.round(combinedScore * 10) / 10,
       chart: pinLiveChartPoint(goldIlsChart, goldPriceILS),
+      spotSource: spot.source,
       timestamp: new Date().toISOString(),
     }, {
       headers: {
