@@ -2,7 +2,13 @@ import { NextResponse } from "next/server";
 
 interface YahooChartResult {
   meta: { regularMarketPrice: number };
+  timestamp?: number[];
   indicators: { quote: [{ close: (number | null)[] }] };
+}
+
+export interface GoldIlsChartPoint {
+  t: number;
+  v: number;
 }
 
 type YahooRange = "1d" | "5d" | "1mo" | "1y";
@@ -13,7 +19,7 @@ async function fetchYahooChart(
   range: YahooRange,
   interval: YahooInterval,
   fresh = false,
-): Promise<{ current: number; history: number[] }> {
+): Promise<{ current: number; points: GoldIlsChartPoint[] }> {
   const res = await fetch(
     `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}`,
     fresh
@@ -23,10 +29,16 @@ async function fetchYahooChart(
   if (!res.ok) throw new Error(`Yahoo Finance failed for ${symbol}: ${res.status}`);
   const data = await res.json();
   const result: YahooChartResult = data.chart.result[0];
-  const closes = result.indicators.quote[0].close.filter(
-    (v): v is number => v !== null && v > 0,
-  );
-  return { current: result.meta.regularMarketPrice, history: closes };
+  const timestamps = result.timestamp ?? [];
+  const closes = result.indicators.quote[0].close;
+  const points: GoldIlsChartPoint[] = [];
+  for (let i = 0; i < closes.length; i++) {
+    const v = closes[i];
+    if (v !== null && v > 0) {
+      points.push({ t: (timestamps[i] ?? 0) * 1000, v });
+    }
+  }
+  return { current: result.meta.regularMarketPrice, points };
 }
 
 /** Live spot gold (USD/oz) via TradingView TVC:GOLD. */
@@ -152,6 +164,22 @@ const PERIOD_CONFIG: Record<string, { goldRange: YahooRange; goldInterval: Yahoo
   yearly:  { goldRange: "1y",  goldInterval: "1d",  ilsRange: "1y",  ilsInterval: "1d" },
 };
 
+function pinLiveChartPoint(
+  points: GoldIlsChartPoint[],
+  livePrice: number,
+): GoldIlsChartPoint[] {
+  const live: GoldIlsChartPoint = {
+    t: Date.now(),
+    v: Math.round(livePrice * 100) / 100,
+  };
+  if (points.length === 0) return [live];
+  const last = points[points.length - 1];
+  if (live.t - last.t < 20 * 60 * 1000) {
+    return [...points.slice(0, -1), live];
+  }
+  return [...points, live];
+}
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -178,11 +206,11 @@ export async function GET(request: Request) {
     // Align futures history to spot level (basis is usually ~1%).
     const basis =
       gold.current > 0 ? spotGoldUSD / gold.current : 1;
-    const goldHistory = gold.history.map((p) => p * basis);
-    const goldFullHistory = (goldYearly?.history ?? gold.history).map(
-      (p) => p * basis,
+    const goldHistory = gold.points.map((p) => p.v * basis);
+    const goldFullHistory = (goldYearly?.points ?? gold.points).map(
+      (p) => p.v * basis,
     );
-    const ilsHistory = ils.history;
+    const ilsHistory = ils.points.map((p) => p.v);
 
     let goldSignal: "low" | "mid" | "high" | "very_high" = "mid";
     let ilsSignal: "strong" | "mid" | "weak" | "very_weak" = "mid";
@@ -220,14 +248,23 @@ export async function GET(request: Request) {
 
     // Build gold-in-ILS history: multiply gold × ILS at each point
     let goldIlsHistory: number[] = [];
+    let goldIlsChart: GoldIlsChartPoint[] = [];
     if (period === "daily") {
       goldIlsHistory = goldHistory.map(g => g * usdToILS);
+      goldIlsChart = gold.points.map((p) => ({
+        t: p.t,
+        v: Math.round(p.v * basis * usdToILS * 100) / 100,
+      }));
     } else {
-      const len = Math.min(goldHistory.length, ilsHistory.length);
+      const len = Math.min(gold.points.length, ils.points.length);
       if (len > 0) {
-        const gSlice = goldHistory.slice(-len);
-        const iSlice = ilsHistory.slice(-len);
-        goldIlsHistory = gSlice.map((g, idx) => g * iSlice[idx]);
+        const gSlice = gold.points.slice(-len);
+        const iSlice = ils.points.slice(-len);
+        goldIlsChart = gSlice.map((g, idx) => ({
+          t: g.t,
+          v: Math.round(g.v * basis * iSlice[idx].v * 100) / 100,
+        }));
+        goldIlsHistory = goldIlsChart.map((p) => p.v);
       }
     }
 
@@ -314,6 +351,7 @@ export async function GET(request: Request) {
       ilsPriceStart: goldIlsHistory.length > 0 ? Math.round(goldIlsHistory[0] * 100) / 100 : 0,
       combined,
       combinedScore: Math.round(combinedScore * 10) / 10,
+      chart: pinLiveChartPoint(goldIlsChart, goldPriceILS),
       timestamp: new Date().toISOString(),
     }, {
       headers: {

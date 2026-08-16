@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { GoldIlsChart } from "@/components/GoldIlsChart";
 
 type Period = "yearly" | "monthly" | "weekly" | "daily";
 
@@ -35,6 +36,7 @@ interface GoldPriceData {
   technical: TechnicalData | null;
   combined: RecLevel;
   combinedScore: number;
+  chart: { t: number; v: number }[];
   timestamp: string;
 }
 
@@ -399,6 +401,12 @@ export default function Home() {
                 </span>
               </div>
             </div>
+
+            <GoldIlsChart
+              points={data.chart ?? []}
+              period={period}
+              onPeriodChange={setPeriod}
+            />
 
             {/* Combined Recommendation */}
             {(() => {
