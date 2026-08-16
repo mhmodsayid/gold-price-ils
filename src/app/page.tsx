@@ -418,6 +418,8 @@ export default function Home() {
               points={data.chart ?? []}
               period={period}
               onPeriodChange={setPeriod}
+              karat={karat}
+              onKaratChange={setKarat}
             />
 
             {/* Combined Recommendation */}

@@ -3,6 +3,7 @@
 import { useId, useMemo, useState } from "react";
 
 export type ChartPeriod = "yearly" | "monthly" | "weekly" | "daily";
+export type ChartKarat = 24 | 22 | 21 | 18 | 14;
 
 export interface GoldIlsChartPoint {
   t: number;
@@ -15,6 +16,9 @@ const PERIODS: { id: ChartPeriod; label: string }[] = [
   { id: "monthly", label: "30d" },
   { id: "yearly", label: "1Y" },
 ];
+
+const KARATS: ChartKarat[] = [24, 22, 21, 18, 14];
+const TROY_OZ_GRAMS = 31.1035;
 
 const W = 640;
 const H = 220;
@@ -63,30 +67,45 @@ export function GoldIlsChart({
   points,
   period,
   onPeriodChange,
+  karat,
+  onKaratChange,
 }: {
   points: GoldIlsChartPoint[];
   period: ChartPeriod;
   onPeriodChange: (p: ChartPeriod) => void;
+  karat: ChartKarat;
+  onKaratChange: (k: ChartKarat) => void;
 }) {
   const gid = useId().replace(/:/g, "");
   const [hover, setHover] = useState<number | null>(null);
+  const purity = karat / 24;
+
+  const scaled = useMemo(
+    () =>
+      points.map((p) => ({
+        t: p.t,
+        v: (p.v / TROY_OZ_GRAMS) * purity,
+        oz: p.v * purity,
+      })),
+    [points, purity],
+  );
 
   const stats = useMemo(() => {
-    if (points.length === 0) return null;
-    const values = points.map((p) => p.v);
+    if (scaled.length === 0) return null;
+    const values = scaled.map((p) => p.v);
     const min = Math.min(...values);
     const max = Math.max(...values);
-    const last = points[points.length - 1].v;
+    const last = scaled[scaled.length - 1].v;
     const span = max - min || Math.abs(last) * 0.02 || 1;
     const yMin = min - span * 0.08;
     const yMax = max + span * 0.08;
     const innerW = W - PAD.l - PAD.r;
     const innerH = H - PAD.t - PAD.b;
     const xAt = (i: number) =>
-      PAD.l + (points.length === 1 ? innerW / 2 : (i / (points.length - 1)) * innerW);
+      PAD.l + (scaled.length === 1 ? innerW / 2 : (i / (scaled.length - 1)) * innerW);
     const yAt = (v: number) =>
       PAD.t + ((yMax - v) / (yMax - yMin)) * innerH;
-    const coords = points.map((p, i) => ({ x: xAt(i), y: yAt(p.v), ...p }));
+    const coords = scaled.map((p, i) => ({ x: xAt(i), y: yAt(p.v), ...p }));
     const line = coords
       .map((c, i) => `${i === 0 ? "M" : "L"} ${c.x.toFixed(2)} ${c.y.toFixed(2)}`)
       .join(" ");
@@ -97,7 +116,7 @@ export function GoldIlsChart({
         ? coords
         : [coords[0], coords[Math.floor(coords.length / 2)], coords[coords.length - 1]];
     return { min, max, last, coords, line, area, ticks, xLabels, yMin, yMax };
-  }, [points]);
+  }, [scaled]);
 
   const active =
     hover !== null && stats ? stats.coords[hover] : stats?.coords[stats.coords.length - 1];
@@ -131,7 +150,9 @@ export function GoldIlsChart({
           <h2 className="text-base sm:text-lg font-semibold text-gray-200">
             Gold Price Chart
           </h2>
-          <p className="text-xs text-gray-500">₪ per troy ounce</p>
+          <p className="text-xs text-gray-500">
+            ₪ per gram · {karat}K · {(purity * 100).toFixed(1)}% pure
+          </p>
         </div>
         <div className="flex gap-1 bg-gray-900/60 border border-gray-700/50 rounded-xl p-1">
           {PERIODS.map((p) => (
@@ -150,10 +171,29 @@ export function GoldIlsChart({
         </div>
       </div>
 
+      <div className="flex gap-1.5 sm:gap-2">
+        {KARATS.map((k) => (
+          <button
+            key={k}
+            onClick={() => onKaratChange(k)}
+            className={`flex-1 py-1.5 sm:py-2 text-xs sm:text-sm font-bold rounded-xl transition-all ${
+              karat === k
+                ? "bg-gradient-to-b from-yellow-500/30 to-amber-600/20 text-yellow-300 border border-yellow-500/40"
+                : "bg-gray-900/50 text-gray-400 border border-gray-700/40 hover:text-gray-200 hover:border-gray-600"
+            }`}
+          >
+            {k}K
+          </button>
+        ))}
+      </div>
+
       {stats && (
         <div className="flex items-baseline gap-2 flex-wrap">
           <p className="text-2xl sm:text-3xl font-bold text-yellow-400">
             {formatIls(active?.v ?? stats.last, 2)}
+            <span className="text-sm sm:text-base font-semibold text-yellow-400/70 ml-1">
+              /g
+            </span>
           </p>
           <p
             className={`text-sm font-semibold ${up ? "text-emerald-400" : "text-red-400"}`}
@@ -163,6 +203,11 @@ export function GoldIlsChart({
             ({displayChangePct > 0 ? "+" : ""}
             {displayChangePct.toFixed(2)}%)
           </p>
+          {active && (
+            <p className="text-xs text-gray-500">
+              {formatIls(active.oz, 2)}/oz
+            </p>
+          )}
         </div>
       )}
 
@@ -176,7 +221,7 @@ export function GoldIlsChart({
             viewBox={`0 0 ${W} ${H}`}
             className="w-full h-auto touch-none cursor-crosshair"
             role="img"
-            aria-label={`Gold price in shekels, currently ${formatIls(stats.last, 2)} per ounce`}
+            aria-label={`Gold price in shekels per gram at ${karat} karat, currently ${formatIls(stats.last, 2)}`}
             onMouseMove={(e) => onPointer(e.clientX, e.currentTarget)}
             onMouseLeave={() => setHover(null)}
             onTouchStart={(e) => onPointer(e.touches[0].clientX, e.currentTarget)}
@@ -215,7 +260,7 @@ export function GoldIlsChart({
                     fontSize="11"
                     fontFamily="ui-sans-serif, system-ui, sans-serif"
                   >
-                    {formatIls(tick)}
+                    {formatIls(tick, 1)}
                   </text>
                 </g>
               );
@@ -277,7 +322,12 @@ export function GoldIlsChart({
               }}
             >
               <p className="text-gray-400">{formatTooltipTime(active.t, period)}</p>
-              <p className="text-yellow-300 font-semibold">{formatIls(active.v, 2)}</p>
+              <p className="text-yellow-300 font-semibold">
+                {formatIls(active.v, 2)}/g
+              </p>
+              <p className="text-gray-500">
+                {formatIls(active.oz, 2)}/oz · {karat}K
+              </p>
             </div>
           )}
         </div>
@@ -285,8 +335,8 @@ export function GoldIlsChart({
 
       {stats && (
         <div className="flex justify-between text-[11px] text-gray-500">
-          <span>Low {formatIls(stats.min, 2)}</span>
-          <span>High {formatIls(stats.max, 2)}</span>
+          <span>Low {formatIls(stats.min, 2)}/g</span>
+          <span>High {formatIls(stats.max, 2)}/g</span>
         </div>
       )}
     </div>
